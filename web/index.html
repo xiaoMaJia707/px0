@@ -235,6 +235,24 @@
 <!-- SECTION: Keyboard Shortcuts Cheat Sheet Overlay (?) -->
 <div id="helpsheet" hidden></div>
 
+<!-- SECTION: Git History Browser Overlay (Mod+Shift+G) -->
+<div id="gitlog" hidden>
+  <div class="gitlog-box">
+    <header class="gitlog-head">
+      <h2 id="gitlog-title">Git History</h2>
+      <div class="gitlog-head-actions">
+        <button id="gitlog-fold" class="gitlog-scope-btn" hidden>Expand all</button>
+        <button id="gitlog-scope" class="gitlog-scope-btn" hidden>This file</button>
+        <button id="gitlog-close" class="mini" title="Close (Esc)">&#10005;</button>
+      </div>
+    </header>
+    <div class="gitlog-body">
+      <div id="gitlog-list" class="gitlog-list"></div>
+      <div id="gitlog-diff" class="gitlog-diff"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Invisible text node to measure font metrics in DOM -->
 <span id="measure">0</span>
 

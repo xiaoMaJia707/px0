@@ -13,6 +13,7 @@ import { showCalls, openLspSetup } from './calls.js';
 import { showHelp } from './shortcuts.js';
 import { listThemes, currentTheme, setTheme, cycleTheme } from './theme.js';
 import { togglePreview } from './markdown.js';
+import { openGitlog } from './gitlog.js';
 
 export const overlay = $('#overlay');
 export const palInput = $('#pal');
@@ -38,6 +39,7 @@ export const COMMANDS = [
   { name: withKeys('Toggle Word Wrap ({Alt+Z})'), run: () => toggleWordWrap() },
   { name: withKeys('Toggle Line Numbers ({Alt+L})'), run: () => toggleLineNumbers() },
   { name: withKeys('Toggle Markdown Preview ({Alt+M})'), run: () => togglePreview() },
+  { name: withKeys('Git History ({Alt+G})'), run: () => { const d = doc_(); openGitlog(d ? d.path : ''); } },
   { name: withKeys('Toggle Sidebar ({Mod+B})'), run: () => document.body.classList.toggle('side-hidden') },
   { name: 'Select Theme…', run: () => openPalette('theme') },
   { name: 'Next Theme', run: cycleTheme },

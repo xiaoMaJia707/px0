@@ -91,20 +91,153 @@ async function drawDiff(d) {
 }
 
 function renderDiff(d) {
-  diffContent.replaceChildren();
-  if (!d.diffHunks || !d.diffHunks.length) {
+  renderHunks(diffContent, d.diffHunks, d.diffMode, 'No changes against HEAD.');
+}
+
+/* Render parsed diff hunks (from parseDiff) into any container in either
+   layout, replacing whatever was there. Used by the active-tab diff overlay and
+   (per file) by the git history view. emptyMsg shows when there are no hunks (a
+   clean file, or a commit that didn't touch the scoped path). */
+export function renderHunks(container, hunks, mode, emptyMsg = 'No changes.') {
+  container.replaceChildren();
+  if (!hunks || !hunks.length) {
     const p = document.createElement('div');
     p.className = 'diff-empty';
-    p.textContent = 'No changes against HEAD.';
-    diffContent.append(p);
+    p.textContent = emptyMsg;
+    container.append(p);
+    return;
+  }
+  container.append(hunksFragment(hunks, mode));
+}
+
+// The hunk rows for one file, as a fragment so a caller can precede it with a
+// file banner (the git history view) or append it alone (the active tab).
+function hunksFragment(hunks, mode) {
+  const frag = document.createDocumentFragment();
+  for (const hunk of hunks) {
+    frag.append(hunkHeader(hunk));
+    frag.append(mode === 'unified' ? unifiedTable(hunk) : splitTable(hunk));
+  }
+  return frag;
+}
+
+/* Render a whole commit's diff (from parseCommitDiff) into a container: a banner
+   per file with its change kind, then that file's hunks (or a note for a
+   binary / rename-only / mode-only change that carries no textual hunks). A file
+   still present after the commit gets an "Open file" link to its current
+   content. emptyMsg covers a commit with no file changes at all (e.g. a merge
+   commit, whose default `git show` output carries no patch). */
+export function renderCommitDiff(container, files, mode, emptyMsg = 'No file changes.') {
+  container.replaceChildren();
+  if (!files || !files.length) {
+    const p = document.createElement('div');
+    p.className = 'diff-empty';
+    p.textContent = emptyMsg;
+    container.append(p);
     return;
   }
   const frag = document.createDocumentFragment();
-  for (const hunk of d.diffHunks) {
-    frag.append(hunkHeader(hunk));
-    frag.append(d.diffMode === 'unified' ? unifiedTable(hunk) : splitTable(hunk));
+  for (const f of files) {
+    // Each file is a collapsible section, collapsed by default so a large commit
+    // opens as a scannable list of filenames; clicking a header reveals its diff.
+    const fileEl = document.createElement('div');
+    fileEl.className = 'diff-file collapsed';
+
+    const body = document.createElement('div');
+    body.className = 'diff-file-body';
+    if (f.hunks.length) {
+      body.append(hunksFragment(f.hunks, mode));
+    } else {
+      const note = document.createElement('div');
+      note.className = 'diff-empty diff-file-note';
+      note.textContent = fileNote(f);
+      body.append(note);
+    }
+
+    const head = fileHeader(f);
+    fileEl.append(head, body);
+    setFileCollapsed(fileEl, true);
+    head.addEventListener('click', () => setFileCollapsed(fileEl, !fileEl.classList.contains('collapsed')));
+    head.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFileCollapsed(fileEl, !fileEl.classList.contains('collapsed')); }
+    });
+    frag.append(fileEl);
   }
-  diffContent.append(frag);
+  container.append(frag);
+}
+
+// Collapses or expands one file section, keeping the header's ARIA state in sync.
+function setFileCollapsed(fileEl, collapsed) {
+  fileEl.classList.toggle('collapsed', collapsed);
+  const head = fileEl.querySelector('.diff-file-head');
+  if (head) head.setAttribute('aria-expanded', String(!collapsed));
+}
+
+// Collapses or expands every file section in a rendered commit diff. Used by the
+// history view's fold-all / expand-all toggle.
+export function setAllFilesCollapsed(container, collapsed) {
+  for (const fileEl of container.querySelectorAll('.diff-file')) setFileCollapsed(fileEl, collapsed);
+}
+
+// True when at least one file section in the container is expanded.
+export function anyFileExpanded(container) {
+  return container.querySelector('.diff-file:not(.collapsed)') !== null;
+}
+
+// A short description of a hunk-less file change, so "changed" never reads as
+// "unchanged" in the history view.
+function fileNote(f) {
+  if (f.binary) return 'Binary file — no textual diff.';
+  if (f.kind === 'renamed') return 'Renamed' + (f.oldPath && f.newPath ? ' — no content change.' : '.');
+  if (f.kind === 'mode') return 'File mode changed — no content change.';
+  if (f.kind === 'added') return 'Added (empty file).';
+  if (f.kind === 'deleted') return 'Deleted.';
+  return 'No textual diff.';
+}
+
+// A file banner for the git history view: the display path, a change-kind tag,
+// and (when the file still exists) a link opening its current content in a new
+// browser tab, so several files from a commit can be opened side by side while
+// the history view stays put.
+function fileHeader(f) {
+  const el = document.createElement('div');
+  el.className = 'diff-file-head';
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+
+  const caret = document.createElement('span');
+  caret.className = 'diff-file-caret';
+  caret.setAttribute('aria-hidden', 'true');
+  el.append(caret);
+
+  const name = document.createElement('span');
+  name.className = 'diff-file-name';
+  name.textContent = f.display;
+  name.title = f.display;
+  el.append(name);
+
+  if (f.kind && f.kind !== 'modified') {
+    const tag = document.createElement('span');
+    tag.className = 'diff-file-tag';
+    tag.textContent = f.kind;
+    el.append(tag);
+  }
+
+  // Only offer "Open file" when the file still exists after this commit (it has
+  // a new-side path and wasn't deleted); opening a deleted path would 404.
+  if (f.newPath && f.kind !== 'deleted') {
+    const open = document.createElement('a');
+    open.className = 'diff-file-open';
+    open.textContent = 'Open file';
+    open.href = '?path=' + encodeURIComponent(f.newPath);
+    open.target = '_blank';
+    open.rel = 'noopener';
+    open.title = 'Open the current version of this file in a new tab';
+    // The header toggles collapse; the link opens a tab -- don't do both.
+    open.addEventListener('click', e => e.stopPropagation());
+    el.append(open);
+  }
+  return el;
 }
 
 function hunkHeader(hunk) {
@@ -118,11 +251,12 @@ function hunkHeader(hunk) {
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@[ \t]?(.*)$/;
 
-// Parses a unified diff (as returned by `git diff`) into hunks, each a flat
-// list of rows tagged ctx/add/del carrying old- and/or new-file line numbers.
-// File headers (diff --git, index, ---, +++) are skipped: nothing before the
-// first @@ is kept.
-function parseDiff(text) {
+// Parses a unified diff (as returned by `git diff` or a single file's `git
+// show`) into hunks: each a flat list of rows tagged ctx/add/del carrying old-
+// and/or new-file line numbers. File headers (diff --git, index, ---, +++) are
+// skipped -- this is for one file's diff. Use parseCommitDiff for a whole
+// commit spanning several files.
+export function parseDiff(text) {
   if (!text) return [];
   const hunks = [];
   let cur = null, oldLine = 0, newLine = 0;
@@ -142,6 +276,153 @@ function parseDiff(text) {
     else cur.rows.push({ type: 'ctx', oldLine: oldLine++, newLine: newLine++, text: body });
   }
   return hunks;
+}
+
+/* ---------- whole-commit diff parsing ---------- */
+
+// Parses a whole commit's `git show` output into one entry per file, so the
+// history view can label every changed file -- including changes that carry no
+// textual hunks (binary, pure rename, mode-only), which a hunk-only parser
+// would silently drop and misreport as "no changes". Each file carries:
+//   display  human path ("old -> new" for a rename)
+//   newPath  repo-relative path after the commit, or '' if deleted (for "Open file")
+//   oldPath  repo-relative path before the commit, or ''
+//   kind     added | deleted | renamed | mode | modified
+//   binary   true if git reported a binary change
+//   hunks    textual hunks (possibly empty)
+// A file block starts at "diff --git"; the a/ b/ prefixes are stripped.
+export function parseCommitDiff(text) {
+  if (!text) return [];
+  const files = [];
+  let f = null;
+  const flush = () => { if (f) { finalizeFile(f); files.push(f); } };
+  let oldLine = 0, newLine = 0, cur = null;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      flush();
+      f = { display: '', newPath: '', oldPath: '', kind: 'modified', binary: false, hunks: [] };
+      cur = null;
+      const pair = parseGitHeaderPaths(line.slice(11));
+      f.oldPath = pair.a; f.newPath = pair.b; // provisional; refined below
+      continue;
+    }
+    if (!f) continue; // preamble before the first file (there is none from git show --format=)
+    if (line.startsWith('new file mode')) { f.kind = 'added'; f.oldPath = ''; continue; }
+    if (line.startsWith('deleted file mode')) { f.kind = 'deleted'; f.newPath = ''; continue; }
+    if (line.startsWith('rename from ')) { f.kind = 'renamed'; f.oldPath = renamePath(line.slice(12)); continue; }
+    if (line.startsWith('rename to ')) { f.kind = 'renamed'; f.newPath = renamePath(line.slice(10)); continue; }
+    if (line.startsWith('old mode ') || line.startsWith('new mode ')) { if (f.kind === 'modified') f.kind = 'mode'; continue; }
+    if (line.startsWith('Binary files ') || line.startsWith('GIT binary patch')) { f.binary = true; continue; }
+    if (line.startsWith('--- ')) { const p = line.slice(4); if (p !== '/dev/null') f.oldPath = headerPath(p); continue; }
+    if (line.startsWith('+++ ')) { const p = line.slice(4); if (p !== '/dev/null') f.newPath = headerPath(p); continue; }
+    const m = HUNK_RE.exec(line);
+    if (m) {
+      if (f.kind === 'mode') f.kind = 'modified'; // a mode change that also has hunks is a content change
+      oldLine = +m[1];
+      newLine = +m[3];
+      cur = { oldStart: oldLine, newStart: newLine, section: m[5] || '', rows: [] };
+      f.hunks.push(cur);
+      continue;
+    }
+    if (!cur || line === '' || line.startsWith('\\')) continue;
+    const c = line[0], body = line.slice(1);
+    if (c === '+') cur.rows.push({ type: 'add', newLine: newLine++, text: body });
+    else if (c === '-') cur.rows.push({ type: 'del', oldLine: oldLine++, text: body });
+    else cur.rows.push({ type: 'ctx', oldLine: oldLine++, newLine: newLine++, text: body });
+  }
+  flush();
+  return files;
+}
+
+// Fills in a file's human-readable display path once all its header lines are
+// seen: "old -> new" for a rename, otherwise whichever path exists.
+function finalizeFile(f) {
+  if (f.kind === 'renamed' && f.oldPath && f.newPath && f.oldPath !== f.newPath) {
+    f.display = f.oldPath + ' → ' + f.newPath;
+  } else {
+    f.display = f.newPath || f.oldPath;
+  }
+}
+
+// Splits a "diff --git a/x b/y" tail into the a- and b-side paths. The a/ b/
+// header is genuinely ambiguous when a path contains a space ("a/x y b/z"), so
+// this is best-effort and the ---/+++/rename lines override it whenever they
+// exist. The cases with NO such lines -- binary and mode-only changes -- always
+// have the same path on both sides ("a/P b/P"), which parses unambiguously:
+//   quoted:    "a/..." "b/..."     -> each side a fully C-quoted token
+//   symmetric: a/P b/P           -> P is the same length on both sides
+// Only a genuine rename-with-space falls back to first " b/", and a rename
+// always has rename from/to lines to correct it.
+function parseGitHeaderPaths(s) {
+  // Quoted form: git wraps a whole side in "..." (prefix included) when the path
+  // has special bytes, e.g.  "a/foo\tbar" "b/foo\tbar"  . Each side is quoted
+  // independently, the two sides separated by a space.
+  if (s.startsWith('"')) {
+    const a = readQuoted(s, 0);
+    // The second side starts at the next non-space; it may or may not be quoted.
+    let j = a.end;
+    while (j < s.length && s[j] === ' ') j++;
+    const b = s[j] === '"' ? readQuoted(s, j) : { value: s.slice(j), end: s.length };
+    return { a: stripDiffPrefix(a.value), b: stripDiffPrefix(b.value) };
+  }
+  // Symmetric unquoted form "a/P b/P": both paths equal, so P has a known length.
+  if (s.startsWith('a/')) {
+    const rest = s.slice(2);            // "P b/P"
+    if (rest.length % 2 === 1) {         // len(P) + 3 (" b/") + len(P) is odd
+      const n = (rest.length - 3) / 2;
+      if (n >= 0 && rest.slice(n, n + 3) === ' b/' && rest.slice(0, n) === rest.slice(n + 3)) {
+        return { a: rest.slice(0, n), b: rest.slice(n + 3) };
+      }
+    }
+    // Fall back to the first " b/" (a rename with a space; rename lines fix it).
+    const i = rest.indexOf(' b/');
+    if (i >= 0) return { a: rest.slice(0, i), b: rest.slice(i + 3) };
+  }
+  return { a: '', b: '' };
+}
+
+// Reads a C-style quoted git path starting at the opening quote index, undoing
+// git's escaping (\t \n \" \\ and \NNN octal bytes decoded as UTF-8). Returns the
+// unquoted value and the index just past the closing quote.
+function readQuoted(s, open) {
+  if (open < 0 || s[open] !== '"') return { value: '', end: -1 };
+  const bytes = [];
+  let i = open + 1;
+  for (; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') { i++; break; }
+    if (c !== '\\') { for (const b of utf8Bytes(c)) bytes.push(b); continue; }
+    const e = s[++i];
+    if (e >= '0' && e <= '7') { // \NNN octal byte
+      bytes.push(parseInt(s.substr(i, 3), 8) & 0xff);
+      i += 2;
+    } else {
+      bytes.push(({ t: 9, n: 10, r: 13 }[e] ?? e.charCodeAt(0)));
+    }
+  }
+  return { value: bytesToStr(bytes), end: i };
+}
+
+function utf8Bytes(ch) { return Array.from(new TextEncoder().encode(ch)); }
+function bytesToStr(bytes) { return new TextDecoder().decode(new Uint8Array(bytes)); }
+
+// Strips git's a/ or b/ diff prefix, undoing C-style quoting first (a ---/+++/
+// rename line quotes the path exactly as the diff --git line does). A path with
+// no prefix (e.g. --no-prefix output) is left as-is.
+function headerPath(p) {
+  if (p.startsWith('"')) return stripDiffPrefix(readQuoted(p, 0).value);
+  return stripDiffPrefix(p);
+}
+
+// A rename from/to path: no a/ b/ prefix, but git still C-quotes it when it has
+// special bytes.
+function renamePath(p) {
+  return p.startsWith('"') ? readQuoted(p, 0).value : p;
+}
+
+// Drops git's a/ or b/ diff prefix from an already-unquoted header path.
+function stripDiffPrefix(p) {
+  return (p.startsWith('a/') || p.startsWith('b/')) ? p.slice(2) : p;
 }
 
 /* ---------- unified layout: one row per diff line ---------- */

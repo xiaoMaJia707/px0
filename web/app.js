@@ -2499,20 +2499,122 @@
     renderDiff(d);
   }
   function renderDiff(d) {
-    diffContent.replaceChildren();
-    if (!d.diffHunks || !d.diffHunks.length) {
+    renderHunks(diffContent, d.diffHunks, d.diffMode, "No changes against HEAD.");
+  }
+  function renderHunks(container, hunks, mode, emptyMsg = "No changes.") {
+    container.replaceChildren();
+    if (!hunks || !hunks.length) {
       const p = document.createElement("div");
       p.className = "diff-empty";
-      p.textContent = "No changes against HEAD.";
-      diffContent.append(p);
+      p.textContent = emptyMsg;
+      container.append(p);
+      return;
+    }
+    container.append(hunksFragment(hunks, mode));
+  }
+  function hunksFragment(hunks, mode) {
+    const frag = document.createDocumentFragment();
+    for (const hunk of hunks) {
+      frag.append(hunkHeader(hunk));
+      frag.append(mode === "unified" ? unifiedTable(hunk) : splitTable(hunk));
+    }
+    return frag;
+  }
+  function renderCommitDiff(container, files, mode, emptyMsg = "No file changes.") {
+    container.replaceChildren();
+    if (!files || !files.length) {
+      const p = document.createElement("div");
+      p.className = "diff-empty";
+      p.textContent = emptyMsg;
+      container.append(p);
       return;
     }
     const frag = document.createDocumentFragment();
-    for (const hunk of d.diffHunks) {
-      frag.append(hunkHeader(hunk));
-      frag.append(d.diffMode === "unified" ? unifiedTable(hunk) : splitTable(hunk));
+    for (const f of files) {
+      const fileEl = document.createElement("div");
+      fileEl.className = "diff-file collapsed";
+      const body = document.createElement("div");
+      body.className = "diff-file-body";
+      if (f.hunks.length) {
+        body.append(hunksFragment(f.hunks, mode));
+      } else {
+        const note = document.createElement("div");
+        note.className = "diff-empty diff-file-note";
+        note.textContent = fileNote(f);
+        body.append(note);
+      }
+      const head = fileHeader(f);
+      fileEl.append(head, body);
+      setFileCollapsed(fileEl, true);
+      head.addEventListener("click", () => setFileCollapsed(fileEl, !fileEl.classList.contains("collapsed")));
+      head.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setFileCollapsed(fileEl, !fileEl.classList.contains("collapsed"));
+        }
+      });
+      frag.append(fileEl);
     }
-    diffContent.append(frag);
+    container.append(frag);
+  }
+  function setFileCollapsed(fileEl, collapsed) {
+    fileEl.classList.toggle("collapsed", collapsed);
+    const head = fileEl.querySelector(".diff-file-head");
+    if (head)
+      head.setAttribute("aria-expanded", String(!collapsed));
+  }
+  function setAllFilesCollapsed(container, collapsed) {
+    for (const fileEl of container.querySelectorAll(".diff-file"))
+      setFileCollapsed(fileEl, collapsed);
+  }
+  function anyFileExpanded(container) {
+    return container.querySelector(".diff-file:not(.collapsed)") !== null;
+  }
+  function fileNote(f) {
+    if (f.binary)
+      return "Binary file — no textual diff.";
+    if (f.kind === "renamed")
+      return "Renamed" + (f.oldPath && f.newPath ? " — no content change." : ".");
+    if (f.kind === "mode")
+      return "File mode changed — no content change.";
+    if (f.kind === "added")
+      return "Added (empty file).";
+    if (f.kind === "deleted")
+      return "Deleted.";
+    return "No textual diff.";
+  }
+  function fileHeader(f) {
+    const el = document.createElement("div");
+    el.className = "diff-file-head";
+    el.tabIndex = 0;
+    el.setAttribute("role", "button");
+    const caret = document.createElement("span");
+    caret.className = "diff-file-caret";
+    caret.setAttribute("aria-hidden", "true");
+    el.append(caret);
+    const name = document.createElement("span");
+    name.className = "diff-file-name";
+    name.textContent = f.display;
+    name.title = f.display;
+    el.append(name);
+    if (f.kind && f.kind !== "modified") {
+      const tag = document.createElement("span");
+      tag.className = "diff-file-tag";
+      tag.textContent = f.kind;
+      el.append(tag);
+    }
+    if (f.newPath && f.kind !== "deleted") {
+      const open = document.createElement("a");
+      open.className = "diff-file-open";
+      open.textContent = "Open file";
+      open.href = "?path=" + encodeURIComponent(f.newPath);
+      open.target = "_blank";
+      open.rel = "noopener";
+      open.title = "Open the current version of this file in a new tab";
+      open.addEventListener("click", (e) => e.stopPropagation());
+      el.append(open);
+    }
+    return el;
   }
   function hunkHeader(hunk) {
     const el = document.createElement("div");
@@ -2547,6 +2649,168 @@
         cur.rows.push({ type: "ctx", oldLine: oldLine++, newLine: newLine++, text: body });
     }
     return hunks;
+  }
+  function parseCommitDiff(text) {
+    if (!text)
+      return [];
+    const files = [];
+    let f = null;
+    const flush = () => {
+      if (f) {
+        finalizeFile(f);
+        files.push(f);
+      }
+    };
+    let oldLine = 0, newLine = 0, cur = null;
+    for (const line of text.split(`
+`)) {
+      if (line.startsWith("diff --git ")) {
+        flush();
+        f = { display: "", newPath: "", oldPath: "", kind: "modified", binary: false, hunks: [] };
+        cur = null;
+        const pair = parseGitHeaderPaths(line.slice(11));
+        f.oldPath = pair.a;
+        f.newPath = pair.b;
+        continue;
+      }
+      if (!f)
+        continue;
+      if (line.startsWith("new file mode")) {
+        f.kind = "added";
+        f.oldPath = "";
+        continue;
+      }
+      if (line.startsWith("deleted file mode")) {
+        f.kind = "deleted";
+        f.newPath = "";
+        continue;
+      }
+      if (line.startsWith("rename from ")) {
+        f.kind = "renamed";
+        f.oldPath = renamePath(line.slice(12));
+        continue;
+      }
+      if (line.startsWith("rename to ")) {
+        f.kind = "renamed";
+        f.newPath = renamePath(line.slice(10));
+        continue;
+      }
+      if (line.startsWith("old mode ") || line.startsWith("new mode ")) {
+        if (f.kind === "modified")
+          f.kind = "mode";
+        continue;
+      }
+      if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) {
+        f.binary = true;
+        continue;
+      }
+      if (line.startsWith("--- ")) {
+        const p = line.slice(4);
+        if (p !== "/dev/null")
+          f.oldPath = headerPath(p);
+        continue;
+      }
+      if (line.startsWith("+++ ")) {
+        const p = line.slice(4);
+        if (p !== "/dev/null")
+          f.newPath = headerPath(p);
+        continue;
+      }
+      const m = HUNK_RE.exec(line);
+      if (m) {
+        if (f.kind === "mode")
+          f.kind = "modified";
+        oldLine = +m[1];
+        newLine = +m[3];
+        cur = { oldStart: oldLine, newStart: newLine, section: m[5] || "", rows: [] };
+        f.hunks.push(cur);
+        continue;
+      }
+      if (!cur || line === "" || line.startsWith("\\"))
+        continue;
+      const c = line[0], body = line.slice(1);
+      if (c === "+")
+        cur.rows.push({ type: "add", newLine: newLine++, text: body });
+      else if (c === "-")
+        cur.rows.push({ type: "del", oldLine: oldLine++, text: body });
+      else
+        cur.rows.push({ type: "ctx", oldLine: oldLine++, newLine: newLine++, text: body });
+    }
+    flush();
+    return files;
+  }
+  function finalizeFile(f) {
+    if (f.kind === "renamed" && f.oldPath && f.newPath && f.oldPath !== f.newPath) {
+      f.display = f.oldPath + " → " + f.newPath;
+    } else {
+      f.display = f.newPath || f.oldPath;
+    }
+  }
+  function parseGitHeaderPaths(s) {
+    if (s.startsWith('"')) {
+      const a = readQuoted(s, 0);
+      let j = a.end;
+      while (j < s.length && s[j] === " ")
+        j++;
+      const b = s[j] === '"' ? readQuoted(s, j) : { value: s.slice(j), end: s.length };
+      return { a: stripDiffPrefix(a.value), b: stripDiffPrefix(b.value) };
+    }
+    if (s.startsWith("a/")) {
+      const rest = s.slice(2);
+      if (rest.length % 2 === 1) {
+        const n = (rest.length - 3) / 2;
+        if (n >= 0 && rest.slice(n, n + 3) === " b/" && rest.slice(0, n) === rest.slice(n + 3)) {
+          return { a: rest.slice(0, n), b: rest.slice(n + 3) };
+        }
+      }
+      const i = rest.indexOf(" b/");
+      if (i >= 0)
+        return { a: rest.slice(0, i), b: rest.slice(i + 3) };
+    }
+    return { a: "", b: "" };
+  }
+  function readQuoted(s, open) {
+    if (open < 0 || s[open] !== '"')
+      return { value: "", end: -1 };
+    const bytes = [];
+    let i = open + 1;
+    for (;i < s.length; i++) {
+      const c = s[i];
+      if (c === '"') {
+        i++;
+        break;
+      }
+      if (c !== "\\") {
+        for (const b of utf8Bytes(c))
+          bytes.push(b);
+        continue;
+      }
+      const e = s[++i];
+      if (e >= "0" && e <= "7") {
+        bytes.push(parseInt(s.substr(i, 3), 8) & 255);
+        i += 2;
+      } else {
+        bytes.push({ t: 9, n: 10, r: 13 }[e] ?? e.charCodeAt(0));
+      }
+    }
+    return { value: bytesToStr(bytes), end: i };
+  }
+  function utf8Bytes(ch) {
+    return Array.from(new TextEncoder().encode(ch));
+  }
+  function bytesToStr(bytes) {
+    return new TextDecoder().decode(new Uint8Array(bytes));
+  }
+  function headerPath(p) {
+    if (p.startsWith('"'))
+      return stripDiffPrefix(readQuoted(p, 0).value);
+    return stripDiffPrefix(p);
+  }
+  function renamePath(p) {
+    return p.startsWith('"') ? readQuoted(p, 0).value : p;
+  }
+  function stripDiffPrefix(p) {
+    return p.startsWith("a/") || p.startsWith("b/") ? p.slice(2) : p;
   }
   function unifiedTable(hunk) {
     const table = document.createElement("div");
@@ -3355,6 +3619,194 @@
       setTheme(all[0].id, false);
   }
 
+  // web/src/gitlog.js
+  var gitlog = $("#gitlog");
+  var gitlogList = $("#gitlog-list");
+  var diffEl = $("#gitlog-diff");
+  var titleEl = $("#gitlog-title");
+  var scopeEl = $("#gitlog-scope");
+  var foldEl = $("#gitlog-fold");
+  var scope = "";
+  var commits = [];
+  var sel = null;
+  var gen = 0;
+  function relTime(iso) {
+    const then = Date.parse(iso);
+    if (isNaN(then))
+      return "";
+    const s = Math.max(0, (Date.now() - then) / 1000);
+    if (s < 60)
+      return "just now";
+    const m = s / 60;
+    if (m < 60)
+      return Math.floor(m) + "m ago";
+    const h = m / 60;
+    if (h < 24)
+      return Math.floor(h) + "h ago";
+    const d = h / 24;
+    if (d < 30)
+      return Math.floor(d) + "d ago";
+    const mo = d / 30;
+    if (mo < 12)
+      return Math.floor(mo) + "mo ago";
+    return Math.floor(d / 365) + "y ago";
+  }
+  function openGitlog(path = "") {
+    if (!S2.meta?.git)
+      return;
+    scope = path;
+    gitlog.hidden = false;
+    loadCommits();
+  }
+  function closeGitlog() {
+    gen++;
+    gitlog.hidden = true;
+  }
+  function gitlogOpen() {
+    return !gitlog.hidden;
+  }
+  function toggleScope() {
+    const d = doc_();
+    scope = scope ? "" : d ? d.path : "";
+    loadCommits();
+  }
+  async function loadCommits() {
+    const my = ++gen;
+    sel = null;
+    commits = [];
+    titleEl.textContent = scope ? "File History" : "Git History";
+    updateScopeButton();
+    gitlogList.replaceChildren(msg("Loading…"));
+    diffEl.replaceChildren();
+    updateFoldButton(false);
+    let j;
+    try {
+      j = await api("/api/gitlog", { path: scope, limit: 200 });
+    } catch (e) {
+      if (my !== gen)
+        return;
+      gitlogList.replaceChildren(msg("Failed to load history: " + e.message));
+      return;
+    }
+    if (my !== gen)
+      return;
+    if (!j.available) {
+      gitlogList.replaceChildren(msg("Git history unavailable."));
+      return;
+    }
+    commits = j.commits || [];
+    drawList();
+    if (commits.length)
+      selectCommit(commits[0].hash);
+  }
+  function drawList() {
+    if (!commits.length) {
+      gitlogList.replaceChildren(msg(scope ? "No history for this file." : "No commits."));
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const c of commits) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "gitlog-item" + (c.hash === sel ? " sel" : "");
+      row.dataset.hash = c.hash;
+      const subj = document.createElement("div");
+      subj.className = "gitlog-subj";
+      subj.textContent = c.subject;
+      const meta = document.createElement("div");
+      meta.className = "gitlog-meta";
+      const sha = document.createElement("span");
+      sha.className = "gitlog-sha";
+      sha.textContent = c.short;
+      const who = document.createElement("span");
+      who.className = "gitlog-author";
+      who.textContent = c.author;
+      const when = document.createElement("span");
+      when.className = "gitlog-when";
+      when.textContent = relTime(c.date);
+      when.title = c.date;
+      meta.append(sha, who, when);
+      row.append(subj, meta);
+      frag.append(row);
+    }
+    gitlogList.replaceChildren(frag);
+  }
+  async function selectCommit(hash) {
+    sel = hash;
+    const my = ++gen;
+    for (const el of gitlogList.children) {
+      if (el.dataset)
+        el.classList.toggle("sel", el.dataset.hash === hash);
+    }
+    diffEl.replaceChildren(msg("Loading diff…"));
+    updateFoldButton(false);
+    let j;
+    try {
+      j = await api("/api/gitshow", { rev: hash, path: scope });
+    } catch (e) {
+      if (my !== gen)
+        return;
+      diffEl.replaceChildren(msg("Failed to load diff: " + e.message));
+      return;
+    }
+    if (my !== gen || sel !== hash)
+      return;
+    const files = parseCommitDiff(j.diff || "");
+    renderCommitDiff(diffEl, files, layoutPref(), scope ? "This commit did not change this file." : "No default patch (a merge commit, or an empty commit).");
+    updateFoldButton(files.length > 0);
+  }
+  function updateFoldButton(show) {
+    if (!foldEl)
+      return;
+    if (!show) {
+      foldEl.hidden = true;
+      return;
+    }
+    foldEl.hidden = false;
+    foldEl.textContent = anyFileExpanded(diffEl) ? "Fold all" : "Expand all";
+  }
+  function updateScopeButton() {
+    const d = doc_();
+    if (!d && !scope) {
+      scopeEl.hidden = true;
+      return;
+    }
+    scopeEl.hidden = false;
+    if (scope) {
+      scopeEl.textContent = "All commits";
+      scopeEl.title = "Show the whole repository history";
+    } else {
+      scopeEl.textContent = "This file";
+      scopeEl.title = "Show only the active file’s history";
+    }
+  }
+  function msg(text) {
+    const el = document.createElement("div");
+    el.className = "gitlog-msg";
+    el.textContent = text;
+    return el;
+  }
+  function initGitlog() {
+    if (!gitlog)
+      return;
+    $("#gitlog-close").addEventListener("click", closeGitlog);
+    scopeEl.addEventListener("click", toggleScope);
+    if (foldEl)
+      foldEl.addEventListener("click", () => {
+        setAllFilesCollapsed(diffEl, anyFileExpanded(diffEl));
+        updateFoldButton(true);
+      });
+    gitlog.addEventListener("mousedown", (e) => {
+      if (e.target === gitlog)
+        closeGitlog();
+    });
+    gitlogList.addEventListener("click", (e) => {
+      const row = e.target.closest(".gitlog-item");
+      if (row && row.dataset.hash !== sel)
+        selectCommit(row.dataset.hash);
+    });
+  }
+
   // web/src/shortcuts.js
   var SHORTCUTS = [
     [["Mod+K"], "Quick search / palette"],
@@ -3365,6 +3817,7 @@
     [["Mod+F"], "Find in file"],
     [["Mod+G"], "Go to line"],
     [["Mod+D"], "Toggle diff view (git)"],
+    [["Alt+G"], "Git history (git)"],
     [["Alt+Z"], "Toggle word wrap"],
     [["Alt+L"], "Toggle line numbers"],
     [["Alt+M"], "Toggle Markdown preview"],
@@ -3432,6 +3885,10 @@
     addEventListener("keydown", (e) => {
       const mod = e[MOD];
       if (e.key === "Escape") {
+        if (gitlogOpen()) {
+          closeGitlog();
+          return;
+        }
         if (!overlay.hidden) {
           closePalette();
           return;
@@ -3520,6 +3977,14 @@
         if (S2.meta?.git) {
           e.preventDefault();
           toggleDiff();
+        }
+        return;
+      }
+      if (e.altKey && !mod && !e.shiftKey && e.code === "KeyG") {
+        if (S2.meta?.git) {
+          e.preventDefault();
+          const d2 = doc_();
+          openGitlog(d2 ? d2.path : "");
         }
         return;
       }
@@ -3723,6 +4188,10 @@
     { name: withKeys("Toggle Word Wrap ({Alt+Z})"), run: () => toggleWordWrap() },
     { name: withKeys("Toggle Line Numbers ({Alt+L})"), run: () => toggleLineNumbers() },
     { name: withKeys("Toggle Markdown Preview ({Alt+M})"), run: () => togglePreview() },
+    { name: withKeys("Git History ({Alt+G})"), run: () => {
+      const d = doc_();
+      openGitlog(d ? d.path : "");
+    } },
     { name: withKeys("Toggle Sidebar ({Mod+B})"), run: () => document.body.classList.toggle("side-hidden") },
     { name: "Select Theme…", run: () => openPalette("theme") },
     { name: "Next Theme", run: cycleTheme },
@@ -3934,6 +4403,7 @@
   initShortcuts();
   initMarkdown();
   initDiff();
+  initGitlog();
   initMetrics();
   initStatusFit();
   (async function boot() {

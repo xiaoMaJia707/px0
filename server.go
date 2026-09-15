@@ -63,6 +63,8 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/markdown", s.handleMarkdown)
 	s.mux.HandleFunc("/api/diff", s.handleDiff)
 	s.mux.HandleFunc("/api/gutter", s.handleGutter)
+	s.mux.HandleFunc("/api/gitlog", s.handleGitLog)
+	s.mux.HandleFunc("/api/gitshow", s.handleGitShow)
 	s.mux.HandleFunc("/api/search", s.handleSearch)
 	s.mux.HandleFunc("/api/outline", s.handleOutline)
 	s.mux.HandleFunc("/api/def", s.handleDef)
@@ -559,6 +561,46 @@ func (s *Server) handleGutter(w http.ResponseWriter, r *http.Request) {
 		"modified":  nz(modified),
 		"deleted":   nz(deleted),
 	})
+}
+
+// handleGitLog lists recent commits, optionally scoped to a file (its own
+// history). commits is always a JSON array ([] when empty, never null);
+// available is false when git is off/absent or `git log` failed. An
+// out-of-repo path is a client error (400), like the other path endpoints.
+func (s *Server) handleGitLog(w http.ResponseWriter, r *http.Request) {
+	rel := ""
+	if p := r.URL.Query().Get("path"); p != "" {
+		if _, rp, ok := s.resolvePath(p); ok {
+			rel = rp
+		} else {
+			fail(w, 400, "bad path")
+			return
+		}
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	commits, ok := gitLog(s.ix.Root(), rel, limit)
+	if commits == nil {
+		commits = []commit{}
+	}
+	writeJSON(w, map[string]any{"path": rel, "commits": commits, "available": ok})
+}
+
+// handleGitShow returns the unified diff a commit introduced, optionally
+// narrowed to one file. available is false (200, empty diff) when git is
+// off/absent, the rev is invalid, or the commit didn't touch the file.
+func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
+	hash := r.URL.Query().Get("rev")
+	rel := ""
+	if p := r.URL.Query().Get("path"); p != "" {
+		if _, rp, ok := s.resolvePath(p); ok {
+			rel = rp
+		} else {
+			fail(w, 400, "bad path")
+			return
+		}
+	}
+	diff := gitShow(s.ix.Root(), hash, rel)
+	writeJSON(w, map[string]any{"rev": hash, "path": rel, "diff": diff, "available": diff != ""})
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

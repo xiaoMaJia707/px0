@@ -18,6 +18,7 @@ import { SEL_KEYS, runSelectionAction, selectAll, clearSelectAll, copySelectAll 
 import { cycleTheme } from './theme.js';
 import { previewing, togglePreview, previewKey, selectPreview } from './markdown.js';
 import { toggleDiff } from './diff.js';
+import { openGitlog, closeGitlog, gitlogOpen } from './gitlog.js';
 
 /* Each entry lists alternative combos, written as for keyLabel in state.js so
    they show as ⌘/⌥/⇧ on a Mac and Ctrl/Alt/Shift elsewhere. Browsers keep
@@ -26,7 +27,7 @@ export const SHORTCUTS = [
   [['Mod+K'], 'Quick search / palette'], [['Mod+P'], 'Go to file'],
   [['Mod+Shift+P'], 'Command palette'], [['Mod+Shift+O'], 'Go to symbol'],
   [['Mod+Shift+F'], 'Search in files'], [['Mod+F'], 'Find in file'],
-  [['Mod+G'], 'Go to line'], [['Mod+D'], 'Toggle diff view (git)'], [['Alt+Z'], 'Toggle word wrap'],
+  [['Mod+G'], 'Go to line'], [['Mod+D'], 'Toggle diff view (git)'], [['Alt+G'], 'Git history (git)'], [['Alt+Z'], 'Toggle word wrap'],
   [['Alt+L'], 'Toggle line numbers'], [['Alt+M'], 'Toggle Markdown preview'],
   [['Enter', 'Shift+Enter'], 'Next / previous match'],
   [['F12', 'Mod+Click'], 'Go to definition'], [['Shift+F12'], 'Find all references'],
@@ -82,6 +83,7 @@ export function initShortcuts() {
     const mod = e[MOD];
 
     if (e.key === 'Escape') {
+      if (gitlogOpen()) { closeGitlog(); return; }
       if (!overlay.hidden) { closePalette(); return; }
       if (!$('#helpsheet').hidden) { $('#helpsheet').hidden = true; return; }
       if (!hovercard.hidden) { clearLink(); return; }
@@ -116,6 +118,11 @@ export function initShortcuts() {
     if (mod && (e.key === 'b' || e.key === 'B')) { e.preventDefault(); document.body.classList.toggle('side-hidden'); layout(); render(); return; }
     // Diff view of the open file (git only; fails quiet when git is off).
     if (mod && !e.shiftKey && (e.key === 'd' || e.key === 'D')) { if (S.meta?.git) { e.preventDefault(); toggleDiff(); } return; }
+    // Git history browser (git only; fails quiet when git is off).
+    // Git history browser (git only; fails quiet when git is off). Alt+G matches
+    // e.code so it fires regardless of what Option+G types on a Mac, and dodges
+    // the browser's own Cmd/Ctrl+Shift+G (find previous).
+    if (e.altKey && !mod && !e.shiftKey && e.code === 'KeyG') { if (S.meta?.git) { e.preventDefault(); const d = doc_(); openGitlog(d ? d.path : ''); } return; }
     // Alt shortcuts match e.code: on a Mac, Option+letter types a symbol, so e.key is not the letter.
     if ((mod && (e.key === 'w' || e.key === 'W')) || (e.altKey && e.code === 'KeyW')) {
       e.preventDefault();
