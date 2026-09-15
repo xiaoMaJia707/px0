@@ -186,7 +186,7 @@ export function anyFileExpanded(container) {
 
 // A short description of a hunk-less file change, so "changed" never reads as
 // "unchanged" in the history view.
-function fileNote(f) {
+export function fileNote(f) {
   if (f.binary) return 'Binary file — no textual diff.';
   if (f.kind === 'renamed') return 'Renamed' + (f.oldPath && f.newPath ? ' — no content change.' : '.');
   if (f.kind === 'mode') return 'File mode changed — no content change.';

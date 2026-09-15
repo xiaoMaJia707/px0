@@ -777,7 +777,9 @@ kbd {
 .gitlog-scope-btn { font: 11px var(--ui); color: var(--fg); background: var(--bg4); border: 1px solid var(--line); border-radius: 5px; padding: 4px 9px; cursor: pointer; }
 .gitlog-scope-btn:hover { border-color: var(--accent); color: var(--accent-fg); }
 .gitlog-body { flex: 1; display: flex; min-height: 0; }
-.gitlog-list { flex: none; width: 340px; overflow: auto; border-right: 1px solid var(--line); padding: 4px 0; }
+.gitlog-left { flex: none; width: 340px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+.gitlog-right { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.gitlog-list { flex: 1; overflow: auto; padding: 4px 0; min-height: 0; }
 .gitlog-item { display: block; width: 100%; text-align: left; padding: 8px 14px; border: 0; background: none; cursor: pointer; border-left: 2px solid transparent; }
 .gitlog-item:hover { background: var(--bg2); }
 .gitlog-item.sel { background: var(--sel); border-left-color: var(--accent); }
@@ -788,6 +790,30 @@ kbd {
 .gitlog-when { margin-left: auto; flex: none; }
 .gitlog-diff { flex: 1; overflow: auto; min-width: 0; font: var(--fs)/var(--lh) var(--mono); background: var(--bg); }
 .gitlog-msg { padding: 20px 16px; color: var(--faint); font: 12px/1.4 var(--ui); }
+.gitlog-more { display: block; width: 100%; text-align: center; padding: 8px 14px; border: 0; border-top: 1px solid var(--line); background: none; cursor: pointer; font: 11px var(--ui); color: var(--dim); }
+.gitlog-more:hover { color: var(--accent-fg); background: var(--bg2); }
+/* V2-only panels: hidden by default (V1), shown when #gitlog has .mode-v2. */
+.gitlog-tree, .gitlog-tabs { display: none; }
+#gitlog.mode-v2 .gitlog-list { flex: none; height: 45%; border-bottom: 1px solid var(--line); }
+#gitlog.mode-v2 .gitlog-tree { display: block; flex: 1; overflow: auto; padding: 4px 0; min-height: 0; }
+#gitlog.mode-v2 .gitlog-tabs { display: flex; flex: none; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--bg3); }
+.gitlog-tree-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font: 12px/1.4 var(--ui); color: var(--fg); white-space: nowrap; cursor: default; }
+.gitlog-tree-row.file { cursor: pointer; border-left: 2px solid transparent; }
+.gitlog-tree-row.file:hover { background: var(--bg2); }
+.gitlog-tree-row.file.sel { background: var(--sel); border-left-color: var(--accent); }
+.gitlog-tree-dir { color: var(--dim); font-weight: 600; }
+.gitlog-tree-name { overflow: hidden; text-overflow: ellipsis; }
+.gitlog-tree-badge { flex: none; margin-left: auto; padding-left: 8px; font: 10px var(--mono); }
+.gitlog-tree-badge.git-M { color: var(--git-mod, var(--accent-fg)); }
+.gitlog-tree-badge.git-A { color: var(--git-add, #6a9955); }
+.gitlog-tree-badge.git-D { color: var(--git-del, #d16969); }
+.gitlog-tree-badge.git-R { color: var(--dim); }
+.gitlog-tab { display: flex; align-items: center; gap: 6px; flex: none; max-width: 220px; padding: 6px 10px; border-right: 1px solid var(--line); cursor: pointer; font: 12px var(--ui); color: var(--dim); background: none; }
+.gitlog-tab:hover { background: var(--bg2); }
+.gitlog-tab.sel { color: var(--fg); background: var(--bg); }
+.gitlog-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gitlog-tab-x { flex: none; opacity: .5; padding: 0 2px; border-radius: 3px; }
+.gitlog-tab-x:hover { opacity: 1; background: var(--bg4); }
 /* Filename banner between files in a multi-file commit diff. */
 .diff-file-head {
   position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px;

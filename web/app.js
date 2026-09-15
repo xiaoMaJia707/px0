@@ -3620,16 +3620,39 @@
   }
 
   // web/src/gitlog.js
+  var PAGE = 50;
+  var MODE_KEY = "px0-gitlog-mode";
   var gitlog = $("#gitlog");
   var gitlogList = $("#gitlog-list");
+  var treeEl2 = $("#gitlog-tree");
+  var tabsEl = $("#gitlog-tabs");
   var diffEl = $("#gitlog-diff");
   var titleEl = $("#gitlog-title");
   var scopeEl = $("#gitlog-scope");
   var foldEl = $("#gitlog-fold");
+  var modeEl = $("#gitlog-mode");
+  var mode = readMode();
   var scope = "";
   var commits = [];
+  var limit = PAGE;
   var sel = null;
-  var gen = 0;
+  var curFiles = [];
+  var tabs = [];
+  var activeTab = -1;
+  var listGen = 0;
+  var diffGen = 0;
+  function readMode() {
+    try {
+      return localStorage.getItem(MODE_KEY) === "v2" ? "v2" : "v1";
+    } catch {
+      return "v1";
+    }
+  }
+  function saveMode() {
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+    } catch {}
+  }
   function relTime(iso) {
     const then = Date.parse(iso);
     if (isNaN(then))
@@ -3655,40 +3678,69 @@
     if (!S2.meta?.git)
       return;
     scope = path;
+    limit = PAGE;
     gitlog.hidden = false;
+    applyMode();
     loadCommits();
   }
   function closeGitlog() {
-    gen++;
+    listGen++;
+    diffGen++;
     gitlog.hidden = true;
   }
   function gitlogOpen() {
     return !gitlog.hidden;
   }
+  function applyMode() {
+    gitlog.classList.toggle("mode-v2", mode === "v2");
+    modeEl.textContent = mode === "v2" ? "Classic view" : "Tree view";
+    modeEl.title = mode === "v2" ? "Switch to the classic single-diff layout" : "Switch to the file-tree + tabs layout";
+  }
+  function toggleMode() {
+    mode = mode === "v2" ? "v1" : "v2";
+    saveMode();
+    applyMode();
+    if (mode === "v1") {
+      clearTabs();
+    } else {
+      treeEl2.replaceChildren();
+    }
+    if (sel)
+      renderSelected();
+    updateFoldButton();
+  }
   function toggleScope() {
     const d = doc_();
     scope = scope ? "" : d ? d.path : "";
+    limit = PAGE;
     loadCommits();
   }
-  async function loadCommits() {
-    const my = ++gen;
-    sel = null;
-    commits = [];
-    titleEl.textContent = scope ? "File History" : "Git History";
-    updateScopeButton();
-    gitlogList.replaceChildren(msg("Loading…"));
-    diffEl.replaceChildren();
-    updateFoldButton(false);
+  async function loadCommits({ keepSel = false } = {}) {
+    const my = ++listGen;
+    if (!keepSel) {
+      diffGen++;
+      sel = null;
+      commits = [];
+      curFiles = [];
+      clearTabs();
+      treeEl2.replaceChildren();
+      diffEl.replaceChildren();
+      titleEl.textContent = scope ? "File History" : "Git History";
+      updateScopeButton();
+      gitlogList.replaceChildren(msg("Loading…"));
+      updateFoldButton();
+    }
     let j;
     try {
-      j = await api("/api/gitlog", { path: scope, limit: 200 });
+      j = await api("/api/gitlog", { path: scope, limit });
     } catch (e) {
-      if (my !== gen)
+      if (my !== listGen)
         return;
-      gitlogList.replaceChildren(msg("Failed to load history: " + e.message));
+      if (!keepSel)
+        gitlogList.replaceChildren(msg("Failed to load history: " + e.message));
       return;
     }
-    if (my !== gen)
+    if (my !== listGen)
       return;
     if (!j.available) {
       gitlogList.replaceChildren(msg("Git history unavailable."));
@@ -3696,8 +3748,12 @@
     }
     commits = j.commits || [];
     drawList();
-    if (commits.length)
+    if (!keepSel && commits.length)
       selectCommit(commits[0].hash);
+  }
+  function loadMore() {
+    limit += PAGE;
+    loadCommits({ keepSel: true });
   }
   function drawList() {
     if (!commits.length) {
@@ -3729,36 +3785,199 @@
       row.append(subj, meta);
       frag.append(row);
     }
+    if (commits.length >= limit) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "gitlog-more";
+      more.dataset.more = "1";
+      more.textContent = "Load more";
+      frag.append(more);
+    }
     gitlogList.replaceChildren(frag);
   }
   async function selectCommit(hash) {
     sel = hash;
-    const my = ++gen;
+    const my = ++diffGen;
+    curFiles = [];
     for (const el of gitlogList.children) {
-      if (el.dataset)
+      if (el.dataset && el.dataset.hash)
         el.classList.toggle("sel", el.dataset.hash === hash);
     }
+    clearTabs();
+    treeEl2.replaceChildren(msg("Loading…"));
     diffEl.replaceChildren(msg("Loading diff…"));
-    updateFoldButton(false);
+    updateFoldButton();
     let j;
     try {
       j = await api("/api/gitshow", { rev: hash, path: scope });
     } catch (e) {
-      if (my !== gen)
+      if (my !== diffGen)
         return;
+      curFiles = [];
+      treeEl2.replaceChildren();
       diffEl.replaceChildren(msg("Failed to load diff: " + e.message));
       return;
     }
-    if (my !== gen || sel !== hash)
+    if (my !== diffGen || sel !== hash)
       return;
-    const files = parseCommitDiff(j.diff || "");
-    renderCommitDiff(diffEl, files, layoutPref(), scope ? "This commit did not change this file." : "No default patch (a merge commit, or an empty commit).");
-    updateFoldButton(files.length > 0);
+    curFiles = parseCommitDiff(j.diff || "");
+    renderSelected();
   }
-  function updateFoldButton(show) {
+  function renderSelected() {
+    if (mode === "v2") {
+      drawTree2();
+      if (activeTab < 0) {
+        diffEl.replaceChildren(msg(curFiles.length ? "Select a file on the left to view its diff." : scope ? "This commit did not change this file." : "No file changes (a merge or empty commit)."));
+      }
+    } else {
+      renderCommitDiff(diffEl, curFiles, layoutPref(), scope ? "This commit did not change this file." : "No default patch (a merge commit, or an empty commit).");
+    }
+    updateFoldButton();
+  }
+  var STATUS_BADGE = { added: "A", deleted: "D", renamed: "R", modified: "M", mode: "M" };
+  var STATUS_CLASS = { added: "git-A", deleted: "git-D", renamed: "git-R", modified: "git-M", mode: "git-M" };
+  function filePath(f) {
+    return f.newPath || f.oldPath || "";
+  }
+  function drawTree2() {
+    if (!curFiles.length) {
+      treeEl2.replaceChildren(msg(scope ? "This commit did not change this file." : "No file changes."));
+      return;
+    }
+    const root = { dirs: new Map, files: [] };
+    curFiles.forEach((f, idx) => {
+      const parts = filePath(f).split("/");
+      const fname = parts.pop();
+      let node = root;
+      for (const p of parts) {
+        if (!node.dirs.has(p))
+          node.dirs.set(p, { dirs: new Map, files: [] });
+        node = node.dirs.get(p);
+      }
+      node.files.push({ name: fname, idx, f });
+    });
+    const frag = document.createDocumentFragment();
+    renderTreeNode(root, 0, frag);
+    treeEl2.replaceChildren(frag);
+  }
+  function renderTreeNode(node, depth, out) {
+    for (let [name, child] of node.dirs) {
+      let label = name;
+      const d = depth;
+      while (child.files.length === 0 && child.dirs.size === 1) {
+        const [nm2, only] = child.dirs.entries().next().value;
+        label += "/" + nm2;
+        child = only;
+      }
+      const row = document.createElement("div");
+      row.className = "gitlog-tree-row dir";
+      row.style.paddingLeft = 8 + d * 14 + "px";
+      const nm = document.createElement("span");
+      nm.className = "gitlog-tree-name gitlog-tree-dir";
+      nm.textContent = label + "/";
+      row.append(nm);
+      out.append(row);
+      renderTreeNode(child, d + 1, out);
+    }
+    for (const item of node.files) {
+      const f = item.f;
+      const row = document.createElement("div");
+      row.className = "gitlog-tree-row file";
+      row.style.paddingLeft = 8 + depth * 14 + "px";
+      row.dataset.idx = String(item.idx);
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      const nm = document.createElement("span");
+      nm.className = "gitlog-tree-name";
+      nm.textContent = item.name;
+      nm.title = f.display || item.name;
+      row.append(nm);
+      const badge = document.createElement("span");
+      badge.className = "gitlog-tree-badge " + (STATUS_CLASS[f.kind] || "git-M");
+      badge.textContent = STATUS_BADGE[f.kind] || "M";
+      row.append(badge);
+      out.append(row);
+    }
+  }
+  function clearTabs() {
+    tabs = [];
+    activeTab = -1;
+    tabsEl.replaceChildren();
+  }
+  function openFileTab(idx) {
+    const f = curFiles[idx];
+    if (!f)
+      return;
+    let ti = tabs.findIndex((t) => t.idx === idx);
+    if (ti < 0) {
+      tabs.push({ idx, f });
+      ti = tabs.length - 1;
+    }
+    activeTab = ti;
+    drawTabs2();
+    markTreeSelection();
+    showTab();
+  }
+  function drawTabs2() {
+    const frag = document.createDocumentFragment();
+    tabs.forEach((t, i) => {
+      const tab = document.createElement("div");
+      tab.className = "gitlog-tab" + (i === activeTab ? " sel" : "");
+      tab.dataset.tab = String(i);
+      tab.tabIndex = 0;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", String(i === activeTab));
+      const nm = document.createElement("span");
+      nm.className = "gitlog-tab-name";
+      const base2 = filePath(t.f).split("/").pop();
+      nm.textContent = base2;
+      nm.title = t.f.display || base2;
+      const x = document.createElement("span");
+      x.className = "gitlog-tab-x";
+      x.dataset.close = String(i);
+      x.tabIndex = 0;
+      x.setAttribute("role", "button");
+      x.setAttribute("aria-label", "Close " + base2);
+      x.textContent = "×";
+      tab.append(nm, x);
+      frag.append(tab);
+    });
+    tabsEl.replaceChildren(frag);
+  }
+  function showTab() {
+    const t = tabs[activeTab];
+    if (!t) {
+      diffEl.replaceChildren(msg("Select a file on the left to view its diff."));
+      return;
+    }
+    renderHunks(diffEl, t.f.hunks, layoutPref(), fileNote(t.f));
+  }
+  function closeTab2(i) {
+    tabs.splice(i, 1);
+    if (tabs.length === 0) {
+      activeTab = -1;
+    } else if (activeTab >= tabs.length) {
+      activeTab = tabs.length - 1;
+    } else if (i < activeTab) {
+      activeTab--;
+    }
+    drawTabs2();
+    markTreeSelection();
+    showTab();
+  }
+  function markTreeSelection() {
+    const openIdx = new Set(tabs.map((t) => t.idx));
+    const activeIdx = activeTab >= 0 ? tabs[activeTab].idx : -1;
+    for (const el of treeEl2.querySelectorAll(".gitlog-tree-row.file")) {
+      const idx = +el.dataset.idx;
+      el.classList.toggle("sel", idx === activeIdx);
+      el.classList.toggle("open", openIdx.has(idx));
+    }
+  }
+  function updateFoldButton() {
     if (!foldEl)
       return;
-    if (!show) {
+    if (mode === "v2" || !curFiles.length) {
       foldEl.hidden = true;
       return;
     }
@@ -3789,21 +4008,75 @@
   function initGitlog() {
     if (!gitlog)
       return;
+    applyMode();
     $("#gitlog-close").addEventListener("click", closeGitlog);
+    modeEl.addEventListener("click", toggleMode);
     scopeEl.addEventListener("click", toggleScope);
     if (foldEl)
       foldEl.addEventListener("click", () => {
         setAllFilesCollapsed(diffEl, anyFileExpanded(diffEl));
-        updateFoldButton(true);
+        updateFoldButton();
       });
     gitlog.addEventListener("mousedown", (e) => {
       if (e.target === gitlog)
         closeGitlog();
     });
     gitlogList.addEventListener("click", (e) => {
+      if (e.target.closest("[data-more]")) {
+        loadMore();
+        return;
+      }
       const row = e.target.closest(".gitlog-item");
       if (row && row.dataset.hash !== sel)
         selectCommit(row.dataset.hash);
+    });
+    treeEl2.addEventListener("click", (e) => {
+      const row = e.target.closest(".gitlog-tree-row.file");
+      if (row)
+        openFileTab(+row.dataset.idx);
+    });
+    treeEl2.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ")
+        return;
+      const row = e.target.closest(".gitlog-tree-row.file");
+      if (row) {
+        e.preventDefault();
+        openFileTab(+row.dataset.idx);
+      }
+    });
+    tabsEl.addEventListener("click", (e) => {
+      const x = e.target.closest("[data-close]");
+      if (x) {
+        e.stopPropagation();
+        closeTab2(+x.dataset.close);
+        return;
+      }
+      const tab = e.target.closest("[data-tab]");
+      if (tab) {
+        activeTab = +tab.dataset.tab;
+        drawTabs2();
+        markTreeSelection();
+        showTab();
+      }
+    });
+    tabsEl.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ")
+        return;
+      const x = e.target.closest("[data-close]");
+      if (x) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeTab2(+x.dataset.close);
+        return;
+      }
+      const tab = e.target.closest("[data-tab]");
+      if (tab) {
+        e.preventDefault();
+        activeTab = +tab.dataset.tab;
+        drawTabs2();
+        markTreeSelection();
+        showTab();
+      }
     });
   }
 
@@ -4214,12 +4487,12 @@
     command: { tag: "Command", hint: "" },
     theme: { tag: "Theme", hint: "Arrows preview a theme. Enter keeps it, Esc restores the previous one." }
   };
-  function openPalette(mode, seed) {
-    pal = { mode, items: [], sel: 0, restoreTheme: mode === "theme" ? currentTheme() : null };
+  function openPalette(mode2, seed) {
+    pal = { mode: mode2, items: [], sel: 0, restoreTheme: mode2 === "theme" ? currentTheme() : null };
     overlay.hidden = false;
-    palInput.value = seed !== undefined ? seed : { symbol: "@", line: ":", command: ">" }[mode] || "";
-    $("#pal-mode").textContent = PAL_MODES[mode].tag;
-    $("#pal-hint").textContent = PAL_MODES[mode].hint;
+    palInput.value = seed !== undefined ? seed : { symbol: "@", line: ":", command: ">" }[mode2] || "";
+    $("#pal-mode").textContent = PAL_MODES[mode2].tag;
+    $("#pal-hint").textContent = PAL_MODES[mode2].hint;
     palInput.focus();
     palInput.setSelectionRange(palInput.value.length, palInput.value.length);
     refreshPalette();
@@ -4234,29 +4507,29 @@
     if (!pal)
       return;
     let raw = palInput.value;
-    let mode = pal.mode === "theme" ? "theme" : "file";
-    if (mode === "theme") {} else if (raw.startsWith(">")) {
-      mode = "command";
+    let mode2 = pal.mode === "theme" ? "theme" : "file";
+    if (mode2 === "theme") {} else if (raw.startsWith(">")) {
+      mode2 = "command";
       raw = raw.slice(1);
     } else if (raw.startsWith("@")) {
-      mode = "symbol";
+      mode2 = "symbol";
       raw = raw.slice(1);
     } else if (raw.startsWith(":")) {
-      mode = "line";
+      mode2 = "line";
       raw = raw.slice(1);
     }
-    pal.mode = mode;
-    $("#pal-mode").textContent = PAL_MODES[mode].tag;
-    $("#pal-hint").textContent = PAL_MODES[mode].hint;
+    pal.mode = mode2;
+    $("#pal-mode").textContent = PAL_MODES[mode2].tag;
+    $("#pal-hint").textContent = PAL_MODES[mode2].hint;
     const q = raw.trim();
-    if (mode === "line") {
+    if (mode2 === "line") {
       const d = doc_();
       const n = parseInt(q, 10);
       pal.items = d && n > 0 ? [{ kind: "line", n: Math.min(n, d.total), label: "Line " + Math.min(n, d.total), sub: d.path }] : [];
-    } else if (mode === "command") {
+    } else if (mode2 === "command") {
       const lq = q.toLowerCase();
       pal.items = COMMANDS.filter((c) => c.name.toLowerCase().includes(lq)).map((c) => ({ kind: "cmd", cmd: c, label: c.name, sub: "" }));
-    } else if (mode === "symbol") {
+    } else if (mode2 === "symbol") {
       const d = doc_();
       if (d && !d.outline) {
         try {
@@ -4267,7 +4540,7 @@
       }
       const lq = q.toLowerCase();
       pal.items = (d && d.outline || []).filter((s) => !lq || s.name.toLowerCase().includes(lq)).slice(0, 400).map((s) => ({ kind: "sym", n: s.line, label: s.name, sub: s.kind, right: String(s.line) }));
-    } else if (mode === "theme") {
+    } else if (mode2 === "theme") {
       const lq = q.toLowerCase();
       pal.items = listThemes().filter((t) => (t.name + " " + t.id).toLowerCase().includes(lq)).map((t) => ({ kind: "theme", id: t.id, label: t.name, sub: t.scheme, right: t.id === pal.restoreTheme ? "current" : "" }));
     } else {
@@ -4288,7 +4561,7 @@
         };
       });
     }
-    pal.sel = mode === "theme" ? Math.max(0, pal.items.findIndex((it) => it.id === currentTheme())) : 0;
+    pal.sel = mode2 === "theme" ? Math.max(0, pal.items.findIndex((it) => it.id === currentTheme())) : 0;
     drawPalette();
   }, 40);
   function fuzzyHTML(text, pos) {

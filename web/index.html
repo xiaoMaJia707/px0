@@ -241,14 +241,21 @@
     <header class="gitlog-head">
       <h2 id="gitlog-title">Git History</h2>
       <div class="gitlog-head-actions">
+        <button id="gitlog-mode" class="gitlog-scope-btn" title="Switch layout">Tree view</button>
         <button id="gitlog-fold" class="gitlog-scope-btn" hidden>Expand all</button>
         <button id="gitlog-scope" class="gitlog-scope-btn" hidden>This file</button>
         <button id="gitlog-close" class="mini" title="Close (Esc)">&#10005;</button>
       </div>
     </header>
     <div class="gitlog-body">
-      <div id="gitlog-list" class="gitlog-list"></div>
-      <div id="gitlog-diff" class="gitlog-diff"></div>
+      <div class="gitlog-left">
+        <div id="gitlog-list" class="gitlog-list"></div>
+        <div id="gitlog-tree" class="gitlog-tree"></div>
+      </div>
+      <div class="gitlog-right">
+        <div id="gitlog-tabs" class="gitlog-tabs"></div>
+        <div id="gitlog-diff" class="gitlog-diff"></div>
+      </div>
     </div>
   </div>
 </div>
